@@ -1,0 +1,219 @@
+tosca_definitions_version: cloudify_dsl_1_5
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/5.0.5/types.yaml
+  - plugin:cloudify-kubernetes-plugin
+
+inputs:
+
+  cnf_app_name:
+    display_label: Application Name
+    type: string
+    description: Prefix to use for application service / deployment names
+    default: open5gcore
+  
+  monitoring_app_name:
+    display_label: Monitoring Application Name
+    type: string
+    description: Prefix to use for application service / deployment names
+    default: prom-monitor
+  
+  openshift_master_endpoint:
+    display_label: openshift master endpoint
+    type: string
+    description: openshift master endpoint
+
+  openshift_secret_token:
+    display_label: openshift cluster token
+    type: string
+    description: openshift cluster token
+    
+  kubernetes_master_configuration:
+    type: dict
+    default:
+      host: { get_input: openshift_master_endpoint }
+      api_key: { get_input: openshift_secret_token }
+      verify_ssl: false
+
+  kubernetes_api_options:
+    description: >
+      kubernetes api options
+    default: { get_input: kubernetes_master_configuration }
+
+node_templates:
+  kubernetes_master:
+    type: cloudify.kubernetes.nodes.Master
+    properties:
+      configuration:
+        api_options: { get_input: kubernetes_api_options }
+    # interfaces:
+      # cloudify.interfaces.lifecycle:
+        # create:
+          # implementation: create_prerequisites/add_sctp.sh
+          # inputs: 
+            # args: [user, password]
+          # executor: central_deployment_agent
+        # delete:
+          # implementation: create_prerequisites/delete_sctp.sh
+          # executor: central_deployment_agent  
+  
+  namespace:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path:  create_prerequisites/create-namespace.yaml
+        template_variables:
+          APP_NAME: { get_input: cnf_app_name }
+          APP_NAME1: { get_input: monitoring_app_name }
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift 
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete        
+
+  mongodb-ca:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path: create_prerequisites/mongodb-ca.yaml
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+      - type: cloudify.relationships.depends_on
+        target: namespace
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift 
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete          
+        
+  mongodb:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path: open5gs-mongo/mongo-config.yaml
+        template_variables:
+          APP_NAME: { get_input: cnf_app_name }
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+      - type: cloudify.relationships.depends_on
+        target: mongodb-ca
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift 
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete         
+
+  5gcore:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path: 5gcore/core-deploy.yaml
+        template_variables:
+          APP_NAME: { get_input: cnf_app_name }
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+      - type: cloudify.relationships.depends_on
+        target: mongodb
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete         
+
+  ueran:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path: ueran/ueransim.yaml
+        template_variables:
+          APP_NAME: { get_input: cnf_app_name }
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+      - type: cloudify.relationships.depends_on
+        target: 5gcore
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete         
+
+        
+  promtheus:
+    type: cloudify.kubernetes.resources.FileDefinedResource
+    properties:
+      client_config:
+        configuration:
+          api_options: { get_input: kubernetes_api_options }
+      file:
+        resource_path: prometheus/prometheus.yaml
+        template_variables:
+          APP_NAME1: { get_input: monitoring_app_name }
+    relationships:
+      - type: cloudify.kubernetes.relationships.managed_by_master
+        target: kubernetes_master
+      - type: cloudify.relationships.depends_on
+        target: ueran
+    interfaces:
+      cloudify.interfaces.validation:
+        check_status:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_status
+        check_drift:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_check_drift
+      cloudify.interfaces.lifecycle:
+        update:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_update
+        delete:
+          implementation: kubernetes.cloudify_kubernetes.tasks.file_resource_delete         
+        
